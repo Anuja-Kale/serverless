@@ -25,7 +25,10 @@
   },
   "homepage": "https://github.com/002700699-Anuja-Kale/serverless#readme",
   "dependencies": {
+    "@google-cloud/storage": "^7.6.0",
     "aws-sdk": "^2.1502.0",
-    "mailgun-js": "^0.22.0"
+    "dotenv": "^16.3.1",
+    "mailgun-js": "^0.22.0",
+    "node-fetch": "^3.3.2"
   }
 }
