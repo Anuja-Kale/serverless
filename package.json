@@ -23,5 +23,9 @@
   "bugs": {
     "url": "https://github.com/002700699-Anuja-Kale/serverless/issues"
   },
-  "homepage": "https://github.com/002700699-Anuja-Kale/serverless#readme"
+  "homepage": "https://github.com/002700699-Anuja-Kale/serverless#readme",
+  "dependencies": {
+    "aws-sdk": "^2.1502.0",
+    "mailgun-js": "^0.22.0"
+  }
 }
