@@ -1,0 +1,34 @@
+{
+  "name": "serverless",
+  "version": "1.0.0",
+  "description": "A lightweight JavaScript utility for manipulating JSON data.",
+  "main": "index.js",
+  "scripts": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/002700699-Anuja-Kale/serverless.git"
+  },
+  "keywords": [
+    "\"web",
+    "framework\"",
+    "\"Node.js\"",
+    "\"express\"",
+    "\"API\"",
+    "\"routing\""
+  ],
+  "author": "Anuja Kale",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/002700699-Anuja-Kale/serverless/issues"
+  },
+  "homepage": "https://github.com/002700699-Anuja-Kale/serverless#readme",
+  "dependencies": {
+    "@google-cloud/storage": "^7.6.0",
+    "aws-sdk": "^2.1502.0",
+    "dotenv": "^16.3.1",
+    "mailgun-js": "^0.22.0",
+    "node-fetch": "^3.3.2"
+  }
+}
