@@ -1,5 +1,3 @@
-require('dotenv').config(); // This will load the environment variables from the .env file
-
 const AWS = require('aws-sdk');
 const fetch = require('node-fetch');
 const { Storage } = require('@google-cloud/storage');
