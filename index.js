@@ -2,13 +2,11 @@ const AWS = require('aws-sdk');
 const fetch = require('node-fetch');
 const { Storage } = require('@google-cloud/storage');
 const Mailgun = require('mailgun-js');
+const fs = require('fs').promises;
+const s3 = new AWS.S3();
 
 // Initialize AWS SDK services
 const DynamoDB = new AWS.DynamoDB.DocumentClient();
-
-// Initialize Google Cloud Storage
-const storage = new Storage({ keyFilename: process.env.GCS_KEYFILE });
-const bucket = storage.bucket(process.env.GCS_BUCKET_NAME);
 
 // Initialize Mailgun with environment variables
 const mailgun = Mailgun({
@@ -20,10 +18,34 @@ const mailgun = Mailgun({
 exports.handler = async (event) => {
   const snsMessage = JSON.parse(event.Records[0].Sns.Message);
 
-  // URL of the GitHub release
-  const githubReleaseUrl = 'https://github.com/tparikh/myrepo/archive/refs/tags/v1.0.0.zip';
+  // Define the S3 bucket and key name where the Google Cloud key file is stored
+  const bucketName = process.env.YOUR_S3_BUCKET_NAME; // Replace with your actual S3 bucket name
+  const keyName = process.env.YOUR_S3_KEY_NAME; // The name of your key file in S3
+
+  // Define the temporary path for the key file
+  const tmpKeyFilePath = `/tmp/${keyName}`;
 
   try {
+    // Check if the key file exists in the /tmp directory
+    try {
+      await fs.access(tmpKeyFilePath);
+    } catch {
+      // Key file does not exist in /tmp, download it from S3
+      const params = {
+        Bucket: bucketName,
+        Key: keyName,
+      };
+      const data = await s3.getObject(params).promise();
+      await fs.writeFile(tmpKeyFilePath, data.Body);
+    }
+
+    // Initialize Google Cloud Storage with the key file from /tmp directory
+    const storage = new Storage({ keyFilename: tmpKeyFilePath });
+    const bucket = storage.bucket(process.env.GCS_BUCKET_NAME);
+
+    // URL of the GitHub release
+    const githubReleaseUrl = 'https://github.com/tparikh/myrepo/archive/refs/tags/v1.0.0.zip';
+
     // Download the file from GitHub
     const response = await fetch(githubReleaseUrl);
     if (!response.ok) {
