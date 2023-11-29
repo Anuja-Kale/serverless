@@ -1,86 +1,116 @@
 const AWS = require('aws-sdk');
-const fetch = require('node-fetch');
+const https = require('https');
 const { Storage } = require('@google-cloud/storage');
-const Mailgun = require('mailgun-js');
-const SecretsManager = new AWS.SecretsManager();
-const DynamoDB = new AWS.DynamoDB.DocumentClient();
+const fs = require('fs');
+const path = require('path');
+const uuidv4 = require('uuid').v4;
+const axios = require('axios');
+const { createGzip } = require('zlib');
+const { pipeline } = require('stream');
+const { promisify } = require('util');
 
-// Fetch secret from AWS Secrets Manager
-async function getSecret(secretArn) {
-    try {
-        const data = await SecretsManager.getSecretValue({ SecretId: secretArn }).promise();
-        return data.SecretString ? data.SecretString : Buffer.from(data.SecretBinary, 'base64').toString('ascii');
-    } catch (error) {
-        console.error('Error fetching secret:', error);
-        throw error;
-    }
-}
+const pipe = promisify(pipeline);
 
-// Initialize Mailgun with the Mailgun API Key and domain fetched from Secrets Manager
-async function initMailgun() {
-    const mailgunApiKey = await getSecret(process.env.MAILGUN_API_KEY_SECRET_ARN);
-    const mailgunDomain = await getSecret(process.env.MAILGUN_DOMAIN_SECRET_ARN);
-    return Mailgun({ apiKey: mailgunApiKey, domain: mailgunDomain });
-}
+const ses = new AWS.SES();
+const dynamoDB = new AWS.DynamoDB.DocumentClient();
+const decodedPrivateKey = Buffer.from(process.env.GCP_SERVICE_ACCOUNT_PRIVATE_KEY, 'base64').toString('utf-8');
+const parsedObject  = JSON.parse(decodedPrivateKey);
 
-// Log events to DynamoDB
-async function logDynamoDB(requestId, userEmail, status, info, tableName) {
-    const item = {
-        RequestId: requestId,
-        UserEmail: userEmail,
-        Status: status,
-        Info: info
-    };
-    return DynamoDB.put({ TableName: tableName, Item: item }).promise();
-}
+const storage = new Storage({
+  projectId: process.env.GCP_PROJECT,
+  credentials: {
+      client_email: parsedObject.client_email,
+      private_key: parsedObject.private_key,
+  },
+});
+const bucketName = process.env.GCP_BUCKET_NAME;
+
+// Send email notification
+const sendEmail  = async (recipientEmail, subject, body) => {
+  console.log('Sending email');
+  const mailgunApiKey = process.env.MAILGUN_API_KEY;
+  const domain = 'demo.ashutoshraval.com';
+  const mailgunUrl = `https://api.mailgun.net/v3/${domain}/messages`;
+
+  const auth = 'Basic ' + Buffer.from(`api:${mailgunApiKey}`).toString('base64');
+
+  const response = await axios.post(
+    mailgunUrl,
+    new URLSearchParams({
+      from: `Your Service <mailgun@${domain}>`,
+      to: recipientEmail,
+      subject: subject,
+      text: body,
+    }),
+    {
+      headers: {
+        'Authorization': auth,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    },
+  );
+
+  return response.data;
+};
+
+// Record email event in DynamoDB
+const recordEmailEvent = async (email, subject) => {
+  console.log('Recording email event');
+  const params = {
+    TableName: 'EmailRecords', // Replace with your DynamoDB table name
+    Item: {
+      id: uuidv4(),
+      email: email,
+      subject: subject,
+      timestamp: Date.now(),
+    },
+  };
+  return dynamoDB.put(params).promise();
+};
 
 exports.handler = async (event) => {
-    // Parse the SNS message
-    const snsMessage = JSON.parse(event.Records[0].Sns.Message);
+  const recipientEmail = 'kale.an@northeastern.edu'; // Updated recipient email
 
-    // Fetch secrets
-    const GCS_BUCKET_NAME = JSON.parse(await getSecret(process.env.GCS_BUCKET_SECRET_ARN));
-    const DYNAMODB_TABLE = JSON.parse(await getSecret(process.env.DYNAMODB_TABLE_SECRET_ARN));
-    const GCP_SERVICE_ACCOUNT_KEY = JSON.parse(await getSecret(process.env.GCP_SERVICE_ACCOUNT_SECRET_ARN));
+  try {
+    const releaseUrl = 'https://github.com/tparikh/myrepo/archive/refs/tags/v1.0.0.zip';
+    const tempFilePath = '/tmp/release.zip';
 
-    // Initialize Google Cloud Storage
-    const storage = new Storage({ credentials: GCP_SERVICE_ACCOUNT_KEY });
-    const gcsBucket = storage.bucket(GCS_BUCKET_NAME);
+    const writer = fs.createWriteStream(tempFilePath);
+    const response = await axios.get(releaseUrl, { responseType: 'stream' });
 
-    // Initialize Mailgun
-    const mailgun = await initMailgun();
+    response.data.pipe(writer);
+    await new Promise((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
 
-    // GitHub release URL
-    const githubReleaseUrl = snsMessage.githubReleaseUrl;
+    console.log('Release downloaded successfully.');
 
-    try {
-        // Stream the GitHub release to GCS
-        const response = await fetch(githubReleaseUrl);
-        if (!response.ok) throw new Error(`Failed to fetch ${githubReleaseUrl}: ${response.statusText}`);
+    const fileName = `release-${uuidv4()}.zip`; // Updated file naming convention
+    await storage.bucket(bucketName).upload(tempFilePath, {
+      destination: fileName,
+    });
+    const gcsFilePath = `gs://${bucketName}/${fileName}`;
+    console.log(`Release uploaded to Google Cloud Storage at: ${gcsFilePath}`);
 
-        const gcsFileName = `${Date.now()}-release.zip`;
-        const file = gcsBucket.file(gcsFileName);
-        await file.save(await response.buffer());
+    // Send email notification
+    const emailSubject = 'Download Complete';
+    const emailBody = `Your file has been downloaded and uploaded to: ${gcsFilePath}`;
+    await sendEmail(recipientEmail, emailSubject, emailBody);
 
-        // Construct the submission link for the file in GCS
-        const submissionLink = `https://storage.googleapis.com/${GCS_BUCKET_NAME}/${gcsFileName}`;
+    // Record the email event in DynamoDB
+    await recordEmailEvent(recipientEmail, emailSubject);
 
-        // Send Email Notification using Mailgun
-        const emailData = {
-            from: `Your Name <${process.env.EMAIL_FROM}>`,
-            to: process.env.EMAIL_TO,
-            subject: 'Download Status',
-            text: `The download of the release is complete and stored in Google Cloud Storage. Access it here: ${submissionLink}`
-        };
-        await mailgun.messages().send(emailData);
+    return { statusCode: 200, body: 'Success' };
+  } catch (error) {
+    console.error('Error:', error);
 
-        // Log the email sent in DynamoDB
-        await logDynamoDB(Date.now().toString(), process.env.EMAIL_TO, 'Success', `File uploaded to GCS. Submission link: ${submissionLink}`, DYNAMODB_TABLE);
+    // Send email notification about the failure
+    await sendEmail(recipientEmail, 'Download Failed', `An error occurred while processing your file. ${error}`);
 
-        return { statusCode: 200, body: JSON.stringify({ message: 'Download and email notification complete.' }) };
-    } catch (error) {
-        console.error('Error:', error);
-        await logDynamoDB(Date.now().toString(), process.env.EMAIL_TO, 'Error', error.message, DYNAMODB_TABLE);
-        return { statusCode: 500, body: JSON.stringify({ message: 'An error occurred', error: error.message }) };
-    }
+    // Record the failed email event in DynamoDB
+    await recordEmailEvent(recipientEmail, 'Download Failed');
+
+    return { statusCode: 500, body: 'Error during download and upload' };
+  }
 };
